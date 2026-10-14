@@ -284,8 +284,8 @@ Each flag overrides its environment variable: `PHOTOSCRAWL_LOCAL_MODEL_MAX_TOKEN
 `PHOTOSCRAWL_LOCAL_MODEL_REASONING_ENABLED`, and
 `PHOTOSCRAWL_LOCAL_MODEL_REASONING_MAX_TOKENS`. Invalid values fail before
 classification. No reasoning parameters are sent by default; Ollama requests
-are unchanged. These controls configure the existing loopback model endpoint,
-including a local proxy, and do not enable direct remote endpoints.
+are unchanged. These controls apply to both OpenAI-compatible modes; they do
+not grant upload consent.
 
 Support depends on the model and provider. Consult the
 [OpenAI chat API](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
@@ -299,11 +299,17 @@ complete JSON. Increase the completion budget or reduce reasoning when this
 occurs. Finish reason and prompt/completion/total/reasoning token usage appear in
 classification output, model-run metadata and successful evidence; queue failures
 include bounded diagnostics for truncated, empty and malformed completions.
-HTTP errors retain status and a bounded provider message. Known credential,
+Local HTTP errors retain status and a bounded provider message. Known credential,
 cookie/session, image and structured request echoes are sanitized. Arbitrary
 private prose in a provider error message is not generally redacted; a local
 proxy may return such text. The response's reasoning fields are not included
 in diagnostics.
+
+Remote classification is a separate opt-in mode. It requires a private upload
+manifest and explicit consent for each invocation. See
+[remote classification](docs/remote-classification.md) for planning, execution,
+resource limits and remote failure privacy. Local endpoints retain their
+loopback restrictions.
 
 `neighbors` returns source-level adjacent assets only. It does not create trips,
 people, places, or clusters. Current reasons are deterministic archive facts:

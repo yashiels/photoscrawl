@@ -27,6 +27,7 @@ const (
 )
 
 type ClassifyOptions struct {
+	RemoteModel          RemoteModelOptions
 	All                  bool
 	Limit                int
 	LocalModel           string
@@ -41,6 +42,7 @@ type ClassifyOptions struct {
 }
 
 type ClassifyResult struct {
+	Remote                        *RemoteClassifyResult   `json:"remote,omitempty"`
 	Database                      string                  `json:"database"`
 	Classifier                    string                  `json:"classifier"`
 	ModelID                       string                  `json:"model_id"`
@@ -112,6 +114,9 @@ type visualObservation struct {
 }
 
 func Classify(ctx context.Context, paths Paths, opts ClassifyOptions) (ClassifyResult, error) {
+	if opts.RemoteModel.active() {
+		return classifyRemote(ctx, paths, opts)
+	}
 	completion, err := opts.LocalModelCompletion.normalized()
 	if err != nil {
 		return ClassifyResult{}, err
