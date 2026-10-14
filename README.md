@@ -249,6 +249,7 @@ derivatives and thumbnails. A later explicit live record restores the asset and
 the resources present in that record without discarding other archive history.
 
 `classify` drains that queue into evidence-backed local metadata observations.
+For a controller-reserved retry cohort, see the [bounded recovery contract](docs/recovery-admission.md), including fixed leases, durable attempt markers, and explicit disposition of incomplete attempts.
 With `--local-model <model>`, it also sends image bytes to a local Ollama or
 OpenAI-compatible vision server and stores typed candidate
 observations:
