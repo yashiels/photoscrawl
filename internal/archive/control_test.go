@@ -15,6 +15,9 @@ func TestControlManifest(t *testing.T) {
 		ShareDir:   "share",
 	}
 	manifest := ControlManifest(paths)
+	if !slices.Contains(manifest.Capabilities, "crawl-new-only") || !manifest.Commands["crawl_new_only"].Mutates || !slices.Contains(manifest.Commands["crawl_new_only"].Argv, "--new-only") {
+		t.Fatalf("discovery command contract = %#v", manifest)
+	}
 	if manifest.ID != "photoscrawl" || manifest.Binary.Name != "photoscrawl" {
 		t.Fatalf("identity = %#v", manifest)
 	}

@@ -217,6 +217,7 @@ func run(ctx context.Context, args []string) error {
 		fs := newCommandFlags("crawl", &paths)
 		libraryPath := fs.String("library", "", "Photos Library.photoslibrary path")
 		providerName := fs.String("provider", "auto", "photos provider: auto or sqlite")
+		newOnly := fs.Bool("new-only", false, "discover new assets; defer updates to archived assets until a full crawl")
 		format, err := fs.parse(args[1:], false)
 		if err != nil {
 			return err
@@ -228,6 +229,7 @@ func run(ctx context.Context, args []string) error {
 		result, err := archive.Crawl(ctx, paths, archive.CrawlOptions{
 			LibraryPath: *libraryPath,
 			Provider:    provider,
+			NewOnly:     *newOnly,
 		})
 		if err != nil {
 			return err

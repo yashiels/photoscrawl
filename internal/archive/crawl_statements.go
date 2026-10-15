@@ -6,6 +6,7 @@ import (
 )
 
 type crawlStatements struct {
+	assetExists         *sql.Stmt
 	previousFingerprint *sql.Stmt
 	assetLive           *sql.Stmt
 	assetTombstone      *sql.Stmt
@@ -25,6 +26,7 @@ func prepareCrawlStatements(ctx context.Context, tx *sql.Tx) (*crawlStatements, 
 		target **sql.Stmt
 		query  string
 	}{
+		{&stmts.assetExists, `select exists(select 1 from asset where id = ?)`},
 		{&stmts.previousFingerprint, `
 select seen.source_fingerprint, asset.deleted_at
 from crawl_seen_asset seen
@@ -160,7 +162,7 @@ func (s *crawlStatements) close() {
 	if s == nil {
 		return
 	}
-	for _, stmt := range []*sql.Stmt{s.previousFingerprint, s.assetLive, s.assetTombstone, s.resource, s.resourceTombstone, s.album, s.evidence, s.location, s.fts, s.queue, s.seen} {
+	for _, stmt := range []*sql.Stmt{s.assetExists, s.previousFingerprint, s.assetLive, s.assetTombstone, s.resource, s.resourceTombstone, s.album, s.evidence, s.location, s.fts, s.queue, s.seen} {
 		if stmt != nil {
 			_ = stmt.Close()
 		}

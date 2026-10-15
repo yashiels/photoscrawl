@@ -156,6 +156,7 @@ go run ./cmd/photoscrawl status --full-check --json
 go run ./cmd/photoscrawl crawl --library "$HOME/Pictures/Photos Library.photoslibrary" --json
 go run ./cmd/photoscrawl import-apple --library "$HOME/Pictures/Photos Library.photoslibrary" --json
 go run ./cmd/photoscrawl crawl --provider sqlite --library "/path/to/scratch.photoslibrary" --json
+go run ./cmd/photoscrawl crawl --new-only --library "/path/to/Photos Library.photoslibrary" --json
 go run ./cmd/photoscrawl classify --limit 100 --json
 go run ./cmd/photoscrawl classify --local-model gemma4:e4b --limit 20 --json
 go run ./cmd/photoscrawl classify --local-model photoscrawl-qwen3-vl-8b --local-model-api openai --local-model-url http://127.0.0.1:1234/v1 --limit 20 --json
@@ -207,6 +208,22 @@ The SQLite fallback discovers the numbered album-membership table from the
 snapshot schema, including the macOS 27 generation-34 layout. It requires one
 unambiguous mapping with the expected asset and album columns; unsupported or
 ambiguous layouts fail with an album-mapping error before importing assets.
+
+`crawl --new-only` discovers assets missing from the archive while leaving every
+archived asset and its classification state untouched, including deleted assets.
+It resolves provider identities before skipping existing assets, and ingests new
+assets and new tombstones through the normal transactional path. Repeated runs
+skip assets discovered earlier, including duplicate entries in a snapshot.
+Existing metadata changes, deletions, and restorations wait for a later normal
+`crawl`. Normal crawls still fingerprint the entire provider asset and requeue
+classification when that fingerprint changes.
+
+Discovery output adds `mode: "new_only"` and `assets_skipped_existing` (when
+nonzero). Seen resource, album, and location counts describe the provider snapshot,
+including skipped assets. `previously_seen_missing` remains zero because discovery
+does not reconcile missing assets. Snapshot metadata records the mode; discovery
+preserves existing source-library full-refresh markers and sync cursors. A new
+library binding may be created, without advancing a full-refresh cursor.
 
 `crawl` does not export originals or force iCloud downloads. It records already
 local package media paths for derivatives/renders/originals when they exist, so

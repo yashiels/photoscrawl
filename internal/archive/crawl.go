@@ -19,11 +19,14 @@ import (
 
 type CrawlOptions struct {
 	LibraryPath string
+	NewOnly     bool
 	Provider    photos.Provider
 	Now         func() time.Time
 }
 
 type CrawlResult struct {
+	Mode                  string `json:"mode,omitempty"`
+	AssetsSkippedExisting int    `json:"assets_skipped_existing,omitempty"`
 	Database              string `json:"database"`
 	Provider              string `json:"provider"`
 	SnapshotID            string `json:"snapshot_id"`
@@ -73,8 +76,10 @@ func Crawl(ctx context.Context, paths Paths, opts CrawlOptions) (CrawlResult, er
 	if err := photos.AttachLocalMediaPaths(&snapshot, absLibraryPath); err != nil {
 		return CrawlResult{}, fmt.Errorf("resolve local Photos media paths: %w", err)
 	}
-	if err := validateSnapshotResourceSourceIdentifiers(snapshot); err != nil {
-		return CrawlResult{}, err
+	if !opts.NewOnly {
+		if err := validateSnapshotResourceSourceIdentifiers(snapshot); err != nil {
+			return CrawlResult{}, err
+		}
 	}
 
 	db, err := openArchiveStore(ctx, paths.Database)
@@ -84,6 +89,7 @@ func Crawl(ctx context.Context, paths Paths, opts CrawlOptions) (CrawlResult, er
 	defer db.Close()
 
 	importer := crawlImporter{
+		newOnly:     opts.NewOnly,
 		ctx:         ctx,
 		snapshot:    snapshot,
 		libraryPath: absLibraryPath,
@@ -98,6 +104,7 @@ func Crawl(ctx context.Context, paths Paths, opts CrawlOptions) (CrawlResult, er
 }
 
 type crawlImporter struct {
+	newOnly     bool
 	ctx         context.Context
 	snapshot    photos.LibrarySnapshot
 	libraryPath string
@@ -117,10 +124,19 @@ type assetFTSRefresh struct {
 func (c *crawlImporter) run(tx *sql.Tx) error {
 	ctx := c.ctx
 	sourceID := stableID("source_library", c.libraryPath)
-	snapshotID := stableID("crawl_snapshot", sourceID, c.completedAt.Format(time.RFC3339Nano), c.sourceFingerprint())
+	mode := "full"
+	if c.newOnly {
+		mode = "new_only"
+	}
+	sourceFingerprint := c.sourceFingerprint()
+	if c.newOnly {
+		sourceFingerprint += ":new_only"
+	}
+	snapshotID := stableID("crawl_snapshot", sourceID, c.completedAt.Format(time.RFC3339Nano), sourceFingerprint)
 
 	resourceCount, albumCount, locationCount := snapshotCounts(c.snapshot)
 	metadataJSON, err := jsonText(map[string]any{
+		"mode":                 mode,
 		"provider":             c.snapshot.Provider,
 		"authorization_status": c.snapshot.AuthorizationStatus,
 		"snapshot_metadata":    c.snapshot.Metadata,
@@ -138,7 +154,8 @@ on conflict(id) do update set
   snapshot_created_at = excluded.snapshot_created_at,
   photos_version = excluded.photos_version,
   metadata_json = excluded.metadata_json
-`, sourceID, c.libraryPath, "sqlite:crawl_snapshot/"+snapshotID, c.completedAt.Format(time.RFC3339Nano), c.snapshot.PhotosVersion, metadataJSON); err != nil {
+where not ?
+`, sourceID, c.libraryPath, "sqlite:crawl_snapshot/"+snapshotID, c.completedAt.Format(time.RFC3339Nano), c.snapshot.PhotosVersion, metadataJSON, c.newOnly); err != nil {
 		return fmt.Errorf("upsert source library: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -157,6 +174,9 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		AlbumMembershipsSeen: albumCount,
 		LocationsSeen:        locationCount,
 	}
+	if c.newOnly {
+		c.result.Mode = mode
+	}
 	stmts, err := prepareCrawlStatements(ctx, tx)
 	if err != nil {
 		return err
@@ -170,13 +190,29 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
 	for _, asset := range c.snapshot.Assets {
 		if strings.TrimSpace(asset.LocalIdentifier) == "" {
+			if c.newOnly {
+				return errors.New("new asset has no local identifier")
+			}
 			continue
 		}
-		asset, deleted, err := c.normalizeAssetDeletion(asset)
+		assetID, canonicalIdentifier, err := identities.resolve(c.snapshot.Provider, asset)
 		if err != nil {
 			return err
 		}
-		assetID, canonicalIdentifier, err := identities.resolve(c.snapshot.Provider, asset)
+		if c.newOnly {
+			var exists bool
+			if err := c.stmts.assetExists.QueryRowContext(ctx, assetID).Scan(&exists); err != nil {
+				return fmt.Errorf("check archived asset: %w", err)
+			}
+			if exists {
+				c.result.AssetsSkippedExisting++
+				continue
+			}
+			if err := validateSnapshotResourceSourceIdentifiers(photos.LibrarySnapshot{Assets: []photos.Asset{asset}}); err != nil {
+				return err
+			}
+		}
+		asset, deleted, err := c.normalizeAssetDeletion(asset)
 		if err != nil {
 			return err
 		}
@@ -218,6 +254,9 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	}
 	if err := c.refreshFTS(ctx, tx); err != nil {
 		return err
+	}
+	if c.newOnly {
+		return nil
 	}
 
 	var missing int
