@@ -252,6 +252,8 @@ func run(ctx context.Context, args []string) error {
 		localModel := fs.String("local-model", "", "local vision model to use for content observations")
 		localModelAPI := fs.String("local-model-api", "", "local model API: ollama or openai")
 		localModelURL := fs.String("local-model-url", "", "local model endpoint URL")
+		reservationOwner := fs.String("recovery-reservation-owner", "", "sealed recovery:<run>:reservation owner")
+		participantOwner := fs.String("recovery-claim-owner", "", "unique recovery:<run>:<participant> owner")
 		completionFlags := map[string]string{
 			"local-model-max-tokens":           "OpenAI-compatible completion budget (default 2048; PHOTOSCRAWL_LOCAL_MODEL_MAX_TOKENS)",
 			"local-model-reasoning-effort":     "reasoning effort: none, minimal, low, medium, high, xhigh, max (PHOTOSCRAWL_LOCAL_MODEL_REASONING_EFFORT)",
@@ -267,23 +269,32 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 		overrides := map[string]string{}
+		present := map[string]bool{}
 		fs.Visit(func(f *flag.Flag) {
+			present[f.Name] = true
 			if _, ok := completionFlags[f.Name]; ok {
 				overrides[f.Name] = f.Value.String()
 			}
 		})
+		if present["recovery-reservation-owner"] || present["recovery-claim-owner"] {
+			if !present["recovery-reservation-owner"] || !present["recovery-claim-owner"] || *reservationOwner == "" || *participantOwner == "" || !present["limit"] {
+				return errors.New("recovery requires both nonempty owner flags and an explicit positive --limit <=1000")
+			}
+		}
 		completion, err := archive.ResolveCompletionConfig(overrides)
 		if err != nil {
 			return err
 		}
 		result, err := archive.Classify(ctx, paths, archive.ClassifyOptions{
-			All:                  *all,
-			Limit:                *limit,
-			LocalModel:           *localModel,
-			LocalModelAPI:        *localModelAPI,
-			LocalModelURL:        *localModelURL,
-			LocalModelCompletion: completion,
-			AllowICloudDownloads: *allowICloud,
+			RecoveryReservationOwner: *reservationOwner,
+			RecoveryClaimOwner:       *participantOwner,
+			All:                      *all,
+			Limit:                    *limit,
+			LocalModel:               *localModel,
+			LocalModelAPI:            *localModelAPI,
+			LocalModelURL:            *localModelURL,
+			LocalModelCompletion:     completion,
+			AllowICloudDownloads:     *allowICloud,
 		})
 		if err != nil {
 			return err

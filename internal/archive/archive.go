@@ -251,6 +251,9 @@ func lastImportAt(ctx context.Context, db *sql.DB) (string, error) {
 
 func statusWarnings(counts []control.Count) []string {
 	warnings := []string{}
+	if statusCount(counts, "classification_queue.state.recovery_started") > 0 {
+		warnings = append(warnings, "recovery attempts incomplete; explicit operator disposition required before retry")
+	}
 	if statusCount(counts, "classification_queue.state.pending") > 0 {
 		warnings = append(warnings, "classification queue has pending assets")
 	}

@@ -8,10 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -262,5 +265,45 @@ func TestClassifyCompletionFlagOverridesInvalidEnvironment(t *testing.T) {
 	err := run(context.Background(), []string{"classify", "--db", directory, "--local-model-max-tokens=4096"})
 	if err == nil || strings.Contains(err.Error(), "positive integer") || strings.Contains(err.Error(), "flag provided but not defined") {
 		t.Fatalf("flag did not override environment: %v", err)
+	}
+}
+
+func TestRecoveryFlagsRejectBeforeArchive(t *testing.T) {
+	for _, flags := range [][]string{
+		{"--recovery-reservation-owner="}, {"--recovery-claim-owner="},
+		{"--recovery-reservation-owner=", "--recovery-claim-owner="},
+		{"--recovery-reservation-owner=recovery:run:reservation"},
+		{"--recovery-reservation-owner=recovery:run:reservation", "--recovery-claim-owner=recovery:run:worker"},
+		{"--recovery-reservation-owner=recovery:run:reservation", "--recovery-claim-owner=recovery:other:worker", "--limit=1"},
+		{"--recovery-reservation-owner=recovery:run:reservation", "--recovery-claim-owner=recovery:run:worker", "--limit=0"},
+		{"--recovery-reservation-owner=recovery:run:reservation", "--recovery-claim-owner=recovery:run:worker", "--limit=1", "--all"},
+	} {
+		database := filepath.Join(t.TempDir(), "must-not-exist.sqlite")
+		args := append([]string{"classify", "--db", database, "--local-model=fixture"}, flags...)
+		if err := run(context.Background(), args); err == nil {
+			t.Fatalf("accepted %v", flags)
+		}
+		if _, err := os.Stat(database); !os.IsNotExist(err) {
+			t.Fatalf("archive accessed for %v: %v", flags, err)
+		}
+	}
+}
+
+func TestRecoveryEmptyCLIHasZeroModelCalls(t *testing.T) {
+	database := filepath.Join(t.TempDir(), "empty.sqlite")
+	if err := run(context.Background(), []string{"init", "--db", database, "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Error(w, "unexpected model call", 500)
+	}))
+	defer server.Close()
+	if err := run(context.Background(), []string{"classify", "--db", database, "--json", "--local-model=fixture", "--local-model-api=openai", "--local-model-url=" + server.URL, "--limit=1", "--recovery-reservation-owner=recovery:synthetic:reservation", "--recovery-claim-owner=recovery:synthetic:worker"}); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 0 {
+		t.Fatal("empty recovery CLI sent HTTP")
 	}
 }
