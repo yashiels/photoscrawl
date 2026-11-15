@@ -309,6 +309,7 @@ func migrateArchiveSchema(ctx context.Context, db *store.Store) error {
 			{"classification_queue", "input_fingerprint", "text not null default ''"},
 			{"classification_queue", "claim_owner", "text not null default ''"},
 			{"classification_queue", "claim_expires_at", "text"},
+			{"crawl_seen_asset", "content_fingerprint", "text not null default ''"},
 		}
 		for _, column := range columns {
 			if err := ensureArchiveColumn(ctx, tx, column.table, column.name, column.definition); err != nil {

@@ -128,7 +128,7 @@ select ?,?,'image','','','','','',0,0,0,0,0,'',0,source_library_id,'{}' from ass
 select 'legacy-sqlite', source_library_id, started_at, completed_at, 'photos_sqlite_snapshot',
 asset_count, resource_count, album_membership_count, location_count, metadata_json
 from crawl_snapshot where id = ?;
-insert into crawl_seen_asset values (?, ?, 'legacy-sqlite', 'legacy-sqlite', 'legacy-fingerprint', '2026-09-08T12:00:00Z');
+insert into crawl_seen_asset(source_library_id, asset_id, first_seen_snapshot_id, last_seen_snapshot_id, source_fingerprint, last_seen_at) values (?, ?, 'legacy-sqlite', 'legacy-sqlite', 'legacy-fingerprint', '2026-09-08T12:00:00Z');
 insert into evidence_ref values ('legacy-evidence', ?, 'asset_metadata', 'photos_sqlite_snapshot', ?, '{}');
 insert into classification_queue(id, asset_id, source_library_id, state, reason, needs_download, updated_at) values ('legacy-queue', ?, ?, 'pending', 'metadata_ingested', 0, '2026-09-08T12:00:00Z')`,
 		snapshotID, sourceID, duplicateID, duplicateID, "asset:"+identityFixtureUUID, duplicateID, sourceID); err != nil {

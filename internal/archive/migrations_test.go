@@ -320,8 +320,8 @@ create table if not exists observation_fts_rowid (
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != 6 {
-		t.Fatalf("schema version = %d, want 6", version)
+	if version != SchemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, SchemaVersion)
 	}
 	var rows, mapped, mismatched int
 	if err := migrated.DB().QueryRowContext(ctx, `select count(*) from observation_fts`).Scan(&rows); err != nil {

@@ -1,6 +1,6 @@
 package archive
 
-const SchemaVersion = 6
+const SchemaVersion = 7
 
 const Schema = `
 create table if not exists source_library (
@@ -32,6 +32,7 @@ create table if not exists crawl_seen_asset (
   last_seen_snapshot_id text not null references crawl_snapshot(id),
   source_fingerprint text not null,
   last_seen_at text not null,
+  content_fingerprint text not null default '',
   primary key (source_library_id, asset_id)
 );
 

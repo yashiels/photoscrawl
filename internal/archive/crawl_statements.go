@@ -37,7 +37,7 @@ func prepareCrawlStatements(ctx context.Context, tx *sql.Tx) (*crawlStatements, 
 		query  string
 	}{
 		{&stmts.previousFingerprint, `
-select seen.source_fingerprint, asset.deleted_at
+select seen.source_fingerprint, seen.content_fingerprint, asset.modification_date, asset.deleted_at
 from crawl_seen_asset seen
 join asset on asset.id = seen.asset_id
 where seen.source_library_id = ? and seen.asset_id = ?
@@ -139,11 +139,12 @@ on conflict(asset_id) do update set
   claim_expires_at = null
 `},
 		{&stmts.seen, `
-insert into crawl_seen_asset(source_library_id, asset_id, first_seen_snapshot_id, last_seen_snapshot_id, source_fingerprint, last_seen_at)
-values (?, ?, ?, ?, ?, ?)
+insert into crawl_seen_asset(source_library_id, asset_id, first_seen_snapshot_id, last_seen_snapshot_id, source_fingerprint, content_fingerprint, last_seen_at)
+values (?, ?, ?, ?, ?, ?, ?)
 on conflict(source_library_id, asset_id) do update set
   last_seen_snapshot_id = excluded.last_seen_snapshot_id,
   source_fingerprint = excluded.source_fingerprint,
+  content_fingerprint = excluded.content_fingerprint,
   last_seen_at = excluded.last_seen_at
 `},
 	}

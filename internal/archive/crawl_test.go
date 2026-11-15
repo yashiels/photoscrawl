@@ -256,6 +256,35 @@ func TestCrawlSkipsUnchangedAssetsAndRefreshesSearchForChanges(t *testing.T) {
 	assertSearchCount(t, ctx, paths, "RenamedCollection", 1)
 	assertSearchCount(t, ctx, paths, "OriginalCollection", 0)
 
+	snapshot.Assets[0].Resources = append([]photos.Resource(nil), snapshot.Assets[0].Resources...)
+	for index := range snapshot.Assets[0].Resources {
+		resource := &snapshot.Assets[0].Resources[index]
+		resource.AvailableLocally = !resource.AvailableLocally
+		resource.NeedsDownload = !resource.AvailableLocally
+		resource.LocalPath = ""
+		resource.Availability = "icloud_only"
+	}
+	provider.snapshot = snapshot
+	result, err = Crawl(ctx, paths, CrawlOptions{
+		LibraryPath: libraryPath,
+		Provider:    provider,
+		Now:         fixedClock("2026-08-12T08:40:00Z"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AssetsChanged != 1 || result.QueuedForClassify != 0 {
+		t.Fatalf("locality-only crawl = changed %d queued %d", result.AssetsChanged, result.QueuedForClassify)
+	}
+	db, err = openArchiveStore(ctx, paths.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clearCrawlWriteAudit(t, db.DB())
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	snapshot.Assets[1].DeletionSource = "fixture-explicit-feed"
 	snapshot.Assets[1].DeletionReason = "trashed_in_photos_library"
 	provider.snapshot = snapshot

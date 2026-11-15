@@ -184,10 +184,15 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		if err != nil {
 			return err
 		}
-		previousFingerprint, previouslyDeleted, seenBefore, err := c.previousAssetState(ctx, sourceID, assetID)
+		contentFingerprint, err := assetContentFingerprint(asset)
 		if err != nil {
 			return err
 		}
+		previous, previouslyDeleted, seenBefore, err := c.previousAssetState(ctx, sourceID, assetID)
+		if err != nil {
+			return err
+		}
+		previousFingerprint := previous.fingerprint
 		switch {
 		case !seenBefore:
 			c.result.AssetsNew++
@@ -203,14 +208,14 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			c.result.AssetsRestored++
 		}
 		if seenBefore && previousFingerprint == fingerprint && previouslyDeleted == deleted {
-			if err := c.upsertSeenAsset(ctx, tx, sourceID, assetID, snapshotID, fingerprint); err != nil {
+			if err := c.upsertSeenAsset(ctx, tx, sourceID, assetID, snapshotID, fingerprint, contentFingerprint); err != nil {
 				return err
 			}
 			identities.remember(assetID, canonicalIdentifier, c.snapshot.Provider, asset)
 			continue
 		}
-		needsClassification := !seenBefore || previousFingerprint != fingerprint || previouslyDeleted
-		if err := c.upsertAsset(ctx, tx, sourceID, snapshotID, assetID, canonicalIdentifier, fingerprint, deleted, needsClassification, asset); err != nil {
+		needsClassification := !seenBefore || previouslyDeleted || previous.contentChanged(contentFingerprint, asset)
+		if err := c.upsertAsset(ctx, tx, sourceID, snapshotID, assetID, canonicalIdentifier, fingerprint, contentFingerprint, deleted, needsClassification, asset); err != nil {
 			return err
 		}
 		c.queueFTSRefresh(assetID, asset, deleted)
@@ -247,7 +252,7 @@ where source_library_id = ? and last_seen_snapshot_id <> ?
 	return nil
 }
 
-func (c *crawlImporter) upsertAsset(ctx context.Context, tx *sql.Tx, sourceID, snapshotID, assetID, canonicalIdentifier, fingerprint string, deleted, needsClassification bool, asset photos.Asset) error {
+func (c *crawlImporter) upsertAsset(ctx context.Context, tx *sql.Tx, sourceID, snapshotID, assetID, canonicalIdentifier, fingerprint, contentFingerprint string, deleted, needsClassification bool, asset photos.Asset) error {
 	metadataJSON, err := jsonText(asset.Metadata)
 	if err != nil {
 		return err
@@ -315,7 +320,7 @@ func (c *crawlImporter) upsertAsset(ctx context.Context, tx *sql.Tx, sourceID, s
 			}
 		}
 	}
-	return c.upsertSeenAsset(ctx, tx, sourceID, assetID, snapshotID, fingerprint)
+	return c.upsertSeenAsset(ctx, tx, sourceID, assetID, snapshotID, fingerprint, contentFingerprint)
 }
 
 func (c *crawlImporter) insertResource(ctx context.Context, tx *sql.Tx, assetID, localIdentifier string, resourceIndex int, resource photos.Resource, deleted bool, asset photos.Asset) error {
@@ -580,8 +585,8 @@ func (c *crawlImporter) insertEvidence(ctx context.Context, tx *sql.Tx, assetID,
 	return nil
 }
 
-func (c *crawlImporter) upsertSeenAsset(ctx context.Context, tx *sql.Tx, sourceID, assetID, snapshotID, fingerprint string) error {
-	if _, err := c.stmts.seen.ExecContext(ctx, sourceID, assetID, snapshotID, snapshotID, fingerprint, c.completedAt.Format(time.RFC3339Nano)); err != nil {
+func (c *crawlImporter) upsertSeenAsset(ctx context.Context, tx *sql.Tx, sourceID, assetID, snapshotID, fingerprint, contentFingerprint string) error {
+	if _, err := c.stmts.seen.ExecContext(ctx, sourceID, assetID, snapshotID, snapshotID, fingerprint, contentFingerprint, c.completedAt.Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("upsert crawl seen asset: %w", err)
 	}
 	return nil
@@ -630,17 +635,31 @@ where asset_id = ? and deleted_at is null
 	return nil
 }
 
-func (c *crawlImporter) previousAssetState(ctx context.Context, sourceID, assetID string) (string, bool, bool, error) {
-	var fingerprint string
-	var deletedAt sql.NullString
-	err := c.stmts.previousFingerprint.QueryRowContext(ctx, sourceID, assetID).Scan(&fingerprint, &deletedAt)
+type previousAsset struct {
+	fingerprint        string
+	contentFingerprint string
+	modificationDate   string
+}
+
+func (p previousAsset) contentChanged(contentFingerprint string, asset photos.Asset) bool {
+	if p.contentFingerprint == "" {
+		return p.modificationDate != asset.ModificationDate
+	}
+	return p.contentFingerprint != contentFingerprint
+}
+
+func (c *crawlImporter) previousAssetState(ctx context.Context, sourceID, assetID string) (previousAsset, bool, bool, error) {
+	var previous previousAsset
+	var modificationDate, deletedAt sql.NullString
+	err := c.stmts.previousFingerprint.QueryRowContext(ctx, sourceID, assetID).Scan(&previous.fingerprint, &previous.contentFingerprint, &modificationDate, &deletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, false, nil
+		return previousAsset{}, false, false, nil
 	}
 	if err != nil {
-		return "", false, false, fmt.Errorf("read previous asset state: %w", err)
+		return previousAsset{}, false, false, fmt.Errorf("read previous asset state: %w", err)
 	}
-	return fingerprint, deletedAt.Valid, true, nil
+	previous.modificationDate = modificationDate.String
+	return previous, deletedAt.Valid, true, nil
 }
 
 func (c *crawlImporter) normalizeAssetDeletion(asset photos.Asset) (photos.Asset, bool, error) {
@@ -680,6 +699,40 @@ func snapshotCounts(snapshot photos.LibrarySnapshot) (resources, albums, locatio
 
 func assetFingerprint(asset photos.Asset) (string, error) {
 	data, err := json.Marshal(asset)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+type contentResource struct {
+	Type             string `json:"type"`
+	UTI              string `json:"uti"`
+	OriginalFilename string `json:"original_filename"`
+	FileSize         int64  `json:"file_size"`
+	StableHash       string `json:"stable_hash"`
+}
+
+func assetContentFingerprint(asset photos.Asset) (string, error) {
+	resources := make([]contentResource, 0, len(asset.Resources))
+	for _, resource := range asset.Resources {
+		if strings.HasPrefix(resource.SourceIdentifier, "photos_library_package:") {
+			continue
+		}
+		resources = append(resources, contentResource{resource.Type, resource.UTI, resource.OriginalFilename, resource.FileSize, resource.StableHash})
+	}
+	data, err := json.Marshal(struct {
+		MediaType        string            `json:"media_type"`
+		MediaSubtypes    string            `json:"media_subtypes"`
+		CreationDate     string            `json:"creation_date"`
+		ModificationDate string            `json:"modification_date"`
+		Width            int64             `json:"width"`
+		Height           int64             `json:"height"`
+		DurationSeconds  float64           `json:"duration_seconds"`
+		Location         *photos.Location  `json:"location,omitempty"`
+		Resources        []contentResource `json:"resources"`
+	}{asset.MediaType, asset.MediaSubtypes, asset.CreationDate, asset.ModificationDate, asset.Width, asset.Height, asset.DurationSeconds, asset.Location, resources})
 	if err != nil {
 		return "", err
 	}
