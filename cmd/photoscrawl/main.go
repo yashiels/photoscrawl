@@ -257,6 +257,15 @@ func run(ctx context.Context, args []string) error {
 		localModel := fs.String("local-model", "", "local vision model to use for content observations")
 		localModelAPI := fs.String("local-model-api", "", "local model API: ollama or openai")
 		localModelURL := fs.String("local-model-url", "", "local model endpoint URL")
+		remoteModel := fs.String("remote-model", "", "exact remote vision model ID (planning only)")
+		remoteURL := fs.String("remote-model-url", "", "HTTPS completion endpoint (planning only)")
+		remoteKeyEnv := fs.String("remote-model-key-env", "", "bearer token environment variable (default PHOTOSCRAWL_MODEL_API_KEY)")
+		remoteDryRun := fs.Bool("remote-dry-run", false, "create a private upload plan without HTTP or queue changes")
+		assetIDsFile := fs.String("asset-ids-file", "", "private JSON asset ID array (planning only)")
+		remotePlanOut := fs.String("remote-plan-out", "", "new private manifest path (planning only)")
+		remotePlan := fs.String("remote-plan", "", "private upload manifest (execution only)")
+		allowUpload := fs.Bool("allow-model-upload", false, "authorize this invocation to upload planned images")
+		retryContentFailed := fs.Bool("retry-content-failed", false, "bind selected content-failure retry permission into a new plan")
 		reservationOwner := fs.String("recovery-reservation-owner", "", "sealed recovery:<run>:reservation owner")
 		participantOwner := fs.String("recovery-claim-owner", "", "unique recovery:<run>:<participant> owner")
 		completionFlags := map[string]string{
@@ -274,14 +283,28 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 		overrides := map[string]string{}
+		localFlagsSet, remoteFlagsSet, retryFlagSet, limitSet := false, false, false, false
 		present := map[string]bool{}
 		fs.Visit(func(f *flag.Flag) {
 			present[f.Name] = true
+			switch f.Name {
+			case "local-model", "local-model-url", "local-model-api":
+				localFlagsSet = true
+			case "retry-content-failed":
+				retryFlagSet = true
+			case "limit":
+				limitSet = true
+			case "remote-model", "remote-model-url", "remote-model-key-env", "remote-dry-run", "remote-plan", "remote-plan-out", "asset-ids-file", "allow-model-upload":
+				remoteFlagsSet = true
+			}
 			if _, ok := completionFlags[f.Name]; ok {
 				overrides[f.Name] = f.Value.String()
 			}
 		})
 		if present["recovery-reservation-owner"] || present["recovery-claim-owner"] {
+			if remoteFlagsSet || retryFlagSet {
+				return errors.New("remote model and recovery modes are mutually exclusive")
+			}
 			if !present["recovery-reservation-owner"] || !present["recovery-claim-owner"] || *reservationOwner == "" || *participantOwner == "" || !present["limit"] {
 				return errors.New("recovery requires both nonempty owner flags and an explicit positive --limit <=1000")
 			}
@@ -290,9 +313,14 @@ func run(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
+		remote := archive.RemoteModelOptions{FlagsSet: remoteFlagsSet, Model: *remoteModel, URL: *remoteURL, KeyEnv: *remoteKeyEnv, DryRun: *remoteDryRun, AssetIDsFile: *assetIDsFile, PlanOut: *remotePlanOut, Plan: *remotePlan, AllowUpload: *allowUpload, RetryContentFailed: *retryContentFailed, LocalFlagsSet: localFlagsSet, RetryFlagSet: retryFlagSet}
+		if !limitSet && (*remoteDryRun || *remotePlan != "") {
+			*limit = 0
+		}
 		result, err := archive.Classify(ctx, paths, archive.ClassifyOptions{
 			RecoveryReservationOwner: *reservationOwner,
 			RecoveryClaimOwner:       *participantOwner,
+			RemoteModel:              remote,
 			All:                      *all,
 			Limit:                    *limit,
 			LocalModel:               *localModel,

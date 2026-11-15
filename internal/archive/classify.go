@@ -27,6 +27,7 @@ const (
 )
 
 type ClassifyOptions struct {
+	RemoteModel              RemoteModelOptions
 	RecoveryReservationOwner string
 	RecoveryClaimOwner       string
 	All                      bool
@@ -43,6 +44,7 @@ type ClassifyOptions struct {
 }
 
 type ClassifyResult struct {
+	Remote                        *RemoteClassifyResult   `json:"remote,omitempty"`
 	Database                      string                  `json:"database"`
 	Classifier                    string                  `json:"classifier"`
 	ModelID                       string                  `json:"model_id"`
@@ -115,6 +117,12 @@ type visualObservation struct {
 }
 
 func Classify(ctx context.Context, paths Paths, opts ClassifyOptions) (_ ClassifyResult, returnErr error) {
+	if opts.RemoteModel.active() {
+		if opts.RecoveryReservationOwner != "" || opts.RecoveryClaimOwner != "" {
+			return ClassifyResult{}, errors.New("remote model and recovery modes are mutually exclusive")
+		}
+		return classifyRemote(ctx, paths, opts)
+	}
 	if err := validateRecoveryOptions(opts); err != nil {
 		return ClassifyResult{}, err
 	}
