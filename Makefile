@@ -35,7 +35,7 @@ lint:
 	@set -e; \
 	output_file="$$(mktemp)"; \
 	trap 'rm -f "$$output_file"' EXIT; \
-	if ! GOWORK=off go run golang.org/x/tools/cmd/deadcode@v0.51.0 -test ./... > "$$output_file"; then cat "$$output_file"; exit 1; fi; \
+	if ! GOWORK=off go run golang.org/x/tools/cmd/deadcode@v0.52.0 -test ./... > "$$output_file"; then cat "$$output_file"; exit 1; fi; \
 	if [ -s "$$output_file" ]; then cat "$$output_file"; exit 1; fi
 
 tidy-check:
@@ -52,7 +52,7 @@ snapshot:
 	GOWORK=off $${GORELEASER:-goreleaser} release --snapshot --clean --skip=publish
 
 release:
-	@printf '%s\n' 'local releases are disabled; official releases must use: gh workflow run release-unified.yml --repo openclaw/photoscrawl -f version=X.Y.Z' >&2
+	@printf '%s\n' 'local releases are disabled; after pushing the verified fleet-signed tag, use: gh workflow run release-unified.yml --repo openclaw/photoscrawl -f version=X.Y.Z' >&2
 	@false
 
 verify: check

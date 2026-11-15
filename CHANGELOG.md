@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+## 0.5.6 - 2026-10-26
+
+**Highlights:** SQLite lock waits honor context deadlines with CrawlKit v0.17.3 and SQLite 3.54.1.
+
+- Update CrawlKit to v0.17.3 so SQLite lock waits honor context deadlines, with SQLite 3.54.1.
+
+## 0.5.5 - 2026-10-20
+
+**Highlights:** Rebuild with Go 1.27.3 to fix the reachable crypto/x509 certificate-validation vulnerability.
+
+### Security
+
+- Build with Go 1.27.3 to fix the reachable crypto/x509 certificate-validation vulnerability GO-2026-6809 while retaining the Go 1.27.0 minimum.
+
+## 0.5.4 - 2026-10-20
+
+**Highlights:** Refresh SQLite's C runtime while preserving Go compatibility and the macOS 13 minimum.
+
+- Update SQLite's Go C runtime to modernc.org/libc v1.79.0 while retaining the Go 1.27.0 minimum and Go 1.27.2 build toolchain.
+- Run native CI and vulnerability checks on Xcode 27 runners, preserving the macOS 13 deployment target and verifying Intel builds under Rosetta.
+
+## 0.5.3 - 2026-10-16
+
+**Highlights:** Refresh shared crawler dependencies and verify fleet-signed release tags before publishing.
+
+- Update CrawlKit to v0.17.0 and the dead-code checker to x/tools v0.52.0 while retaining the Go 1.27.0 minimum and Go 1.27.2 build toolchain.
+- Require a fleet-signed annotated release tag, verified against the repository's signing allowlist before publication.
+- Add a release workflow dry run that builds, signs, and verifies artifacts without creating tags or publishing.
+
 ## 0.5.2 - 2026-10-11
 
 **Highlights:** Builds use Go 1.27.2 to fix reachable standard-library security vulnerabilities.
