@@ -15,8 +15,10 @@ concurrency:
 
 jobs:
   test:
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 20
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,6 +38,15 @@ jobs:
           distribution: goreleaser
           version: "~> v2"
           args: build --snapshot --clean --parallelism=2
+
+      - name: Verify both release architectures
+        run: |
+          if ! arch -x86_64 /usr/bin/true; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+          fi
+          arch -x86_64 /usr/bin/true
+          arch -x86_64 dist/darwin_amd64/photoscrawl --version
+          dist/darwin_arm64/photoscrawl --version
 
   portable:
     name: Portable (Go 1.27.0)
@@ -58,7 +69,7 @@ jobs:
         run: make check
 
   vulnerabilities:
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 20
     env:
       GOWORK: "off"
@@ -73,7 +84,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.2"
+          go-version: "1.27.3"
           cache: true
 
       - name: Verify structured scan evaluator
@@ -82,13 +93,13 @@ jobs:
       - name: Stage public modules, scanner and frozen advisories
         run: |
           go version
-          test "$(go env GOVERSION)" = "go1.27.2"
+          test "$(go env GOVERSION)" = "go1.27.3"
           go mod download
           GOBIN="$RUNNER_TEMP/vulntools" go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
           python3 .github/scripts/vulncheck.py stage "$RUNNER_TEMP/vulndb"
 
       - name: Scan native configuration
-        run: python3 .github/scripts/vulncheck.py scan "$RUNNER_TEMP/vulndb" "$RUNNER_TEMP/vulntools/govulncheck" "$RUNNER_TEMP/vuln-preferred" go1.27.2 darwin
+        run: python3 .github/scripts/vulncheck.py scan "$RUNNER_TEMP/vulndb" "$RUNNER_TEMP/vulntools/govulncheck" "$RUNNER_TEMP/vuln-preferred" go1.27.3 darwin
 
       - name: Retain complete advisory evidence
         if: always()

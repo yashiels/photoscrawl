@@ -646,3 +646,22 @@ func TestRemoteHTTPFailuresDiscardEveryProviderField(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoteRecoveryModesMutuallyExclusive(t *testing.T) {
+	for _, remote := range []RemoteModelOptions{{DryRun: true}, {Plan: "unused-plan", AllowUpload: true}} {
+		for _, owners := range [][2]string{{"recovery:synthetic:reservation", ""}, {"", "recovery:synthetic:worker"}, {"recovery:synthetic:reservation", "recovery:synthetic:worker"}} {
+			database := filepath.Join(t.TempDir(), "must-not-exist.sqlite")
+			_, err := Classify(context.Background(), Paths{Database: database}, ClassifyOptions{
+				RemoteModel:              remote,
+				RecoveryReservationOwner: owners[0],
+				RecoveryClaimOwner:       owners[1],
+			})
+			if err == nil || err.Error() != "remote model and recovery modes are mutually exclusive" {
+				t.Fatalf("expected mutual-exclusion error, got %v", err)
+			}
+			if _, err := os.Stat(database); !os.IsNotExist(err) {
+				t.Fatalf("conflicting modes accessed archive: %v", err)
+			}
+		}
+	}
+}

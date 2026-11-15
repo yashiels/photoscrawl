@@ -261,6 +261,8 @@ func run(ctx context.Context, args []string) error {
 		remotePlan := fs.String("remote-plan", "", "private upload manifest (execution only)")
 		allowUpload := fs.Bool("allow-model-upload", false, "authorize this invocation to upload planned images")
 		retryContentFailed := fs.Bool("retry-content-failed", false, "bind selected content-failure retry permission into a new plan")
+		reservationOwner := fs.String("recovery-reservation-owner", "", "sealed recovery:<run>:reservation owner")
+		participantOwner := fs.String("recovery-claim-owner", "", "unique recovery:<run>:<participant> owner")
 		completionFlags := map[string]string{
 			"local-model-max-tokens":           "OpenAI-compatible completion budget (default 2048; PHOTOSCRAWL_LOCAL_MODEL_MAX_TOKENS)",
 			"local-model-reasoning-effort":     "reasoning effort: none, minimal, low, medium, high, xhigh, max (PHOTOSCRAWL_LOCAL_MODEL_REASONING_EFFORT)",
@@ -277,7 +279,9 @@ func run(ctx context.Context, args []string) error {
 		}
 		overrides := map[string]string{}
 		localFlagsSet, remoteFlagsSet, retryFlagSet, limitSet := false, false, false, false
+		present := map[string]bool{}
 		fs.Visit(func(f *flag.Flag) {
+			present[f.Name] = true
 			switch f.Name {
 			case "local-model", "local-model-url", "local-model-api":
 				localFlagsSet = true
@@ -292,6 +296,14 @@ func run(ctx context.Context, args []string) error {
 				overrides[f.Name] = f.Value.String()
 			}
 		})
+		if present["recovery-reservation-owner"] || present["recovery-claim-owner"] {
+			if remoteFlagsSet || retryFlagSet {
+				return errors.New("remote model and recovery modes are mutually exclusive")
+			}
+			if !present["recovery-reservation-owner"] || !present["recovery-claim-owner"] || *reservationOwner == "" || *participantOwner == "" || !present["limit"] {
+				return errors.New("recovery requires both nonempty owner flags and an explicit positive --limit <=1000")
+			}
+		}
 		completion, err := archive.ResolveCompletionConfig(overrides)
 		if err != nil {
 			return err
@@ -301,14 +313,16 @@ func run(ctx context.Context, args []string) error {
 			*limit = 0
 		}
 		result, err := archive.Classify(ctx, paths, archive.ClassifyOptions{
-			RemoteModel:          remote,
-			All:                  *all,
-			Limit:                *limit,
-			LocalModel:           *localModel,
-			LocalModelAPI:        *localModelAPI,
-			LocalModelURL:        *localModelURL,
-			LocalModelCompletion: completion,
-			AllowICloudDownloads: *allowICloud,
+			RecoveryReservationOwner: *reservationOwner,
+			RecoveryClaimOwner:       *participantOwner,
+			RemoteModel:              remote,
+			All:                      *all,
+			Limit:                    *limit,
+			LocalModel:               *localModel,
+			LocalModelAPI:            *localModelAPI,
+			LocalModelURL:            *localModelURL,
+			LocalModelCompletion:     completion,
+			AllowICloudDownloads:     *allowICloud,
 		})
 		if err != nil {
 			return err

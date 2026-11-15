@@ -27,18 +27,20 @@ const (
 )
 
 type ClassifyOptions struct {
-	RemoteModel          RemoteModelOptions
-	All                  bool
-	Limit                int
-	LocalModel           string
-	LocalModelAPI        string
-	LocalModelCompletion CompletionConfig
-	LocalModelURL        string
-	AllowICloudDownloads bool
-	PreviewMaxDimension  int
-	PreviewTimeout       time.Duration
-	Now                  func() time.Time
-	previewExporter      func(context.Context, string, string, int, bool) error
+	RemoteModel              RemoteModelOptions
+	RecoveryReservationOwner string
+	RecoveryClaimOwner       string
+	All                      bool
+	Limit                    int
+	LocalModel               string
+	LocalModelAPI            string
+	LocalModelCompletion     CompletionConfig
+	LocalModelURL            string
+	AllowICloudDownloads     bool
+	PreviewMaxDimension      int
+	PreviewTimeout           time.Duration
+	Now                      func() time.Time
+	previewExporter          func(context.Context, string, string, int, bool) error
 }
 
 type ClassifyResult struct {
@@ -71,6 +73,7 @@ type ClassifyResult struct {
 }
 
 type classifyInput struct {
+	ClaimExpiresAt   string
 	QueueID          string
 	AssetID          string
 	InputFingerprint string
@@ -113,10 +116,22 @@ type visualObservation struct {
 	Confidence      float64
 }
 
-func Classify(ctx context.Context, paths Paths, opts ClassifyOptions) (ClassifyResult, error) {
+func Classify(ctx context.Context, paths Paths, opts ClassifyOptions) (_ ClassifyResult, returnErr error) {
 	if opts.RemoteModel.active() {
+		if opts.RecoveryReservationOwner != "" || opts.RecoveryClaimOwner != "" {
+			return ClassifyResult{}, errors.New("remote model and recovery modes are mutually exclusive")
+		}
 		return classifyRemote(ctx, paths, opts)
 	}
+	if err := validateRecoveryOptions(opts); err != nil {
+		return ClassifyResult{}, err
+	}
+	recovery := opts.RecoveryReservationOwner != ""
+	defer func() {
+		if recovery && returnErr != nil && !strings.Contains(returnErr.Error(), "recovery incomplete") {
+			returnErr = fmt.Errorf("recovery incomplete: %w", returnErr)
+		}
+	}()
 	completion, err := opts.LocalModelCompletion.normalized()
 	if err != nil {
 		return ClassifyResult{}, err
@@ -134,17 +149,6 @@ func Classify(ctx context.Context, paths Paths, opts ClassifyOptions) (ClassifyR
 	if limit > 1000 {
 		limit = 1000
 	}
-
-	db, err := openArchiveStore(ctx, paths.Database)
-	if err != nil {
-		return ClassifyResult{}, err
-	}
-	defer db.Close()
-	claimOwner, err := newClassificationClaimOwner()
-	if err != nil {
-		return ClassifyResult{}, err
-	}
-	defer releaseClassificationClaims(db.DB(), claimOwner)
 
 	result := ClassifyResult{
 		Database:               paths.Database,
@@ -173,12 +177,32 @@ func Classify(ctx context.Context, paths Paths, opts ClassifyOptions) (ClassifyR
 		result.ModelRunID = stableID("model_run", localModelClassifierSource, localModel, localModelPromptVersion, now().UTC().Format(time.RFC3339Nano))
 	}
 
+	db, err := openArchiveStore(ctx, paths.Database)
+	if err != nil {
+		return ClassifyResult{}, err
+	}
+	defer db.Close()
+	claimOwner, err := newClassificationClaimOwner()
+	if err != nil {
+		return ClassifyResult{}, err
+	}
+	if recovery {
+		claimOwner = opts.RecoveryClaimOwner
+	} else {
+		defer releaseClassificationClaims(db.DB(), claimOwner)
+	}
+
 	responseEndpoints := map[string]struct{}{}
 	claimedInputs := 0
+	fixedExpiry := ""
 	for limit == 0 || claimedInputs < limit {
 		var input *classifyInput
 		err = db.WithTx(ctx, func(tx *sql.Tx) error {
 			var err error
+			if recovery {
+				input, err = claimRecoveryInput(ctx, tx, opts, now().UTC(), fixedExpiry)
+				return err
+			}
 			input, err = claimClassifyInput(ctx, tx, claimOwner, now().UTC(), classifier != nil, classifier != nil && opts.AllowICloudDownloads)
 			return err
 		})
@@ -189,6 +213,20 @@ func Classify(ctx context.Context, paths Paths, opts ClassifyOptions) (ClassifyR
 			break
 		}
 		claimedInputs++
+		if recovery {
+			if fixedExpiry == "" {
+				fixedExpiry = input.ClaimExpiresAt
+				expiry, _ := time.Parse(time.RFC3339Nano, fixedExpiry)
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, expiry.Add(-recoveryDeadlineMargin))
+				defer cancel()
+			}
+			if err := db.WithTx(ctx, func(tx *sql.Tx) error {
+				return markRecoveryStarted(ctx, tx, *input, now().UTC())
+			}); err != nil {
+				return ClassifyResult{}, fmt.Errorf("recovery incomplete: %w", err)
+			}
+		}
 		var contentResult *localModelResult
 		var contentErr error
 		imagePath, hasImage := input.contentImagePath()
@@ -222,9 +260,15 @@ func Classify(ctx context.Context, paths Paths, opts ClassifyOptions) (ClassifyR
 		}
 
 		err := db.WithTx(ctx, func(tx *sql.Tx) error {
-			current, err := lockCurrentClassificationClaim(ctx, tx, *input, now().UTC())
-			if err != nil || !current {
-				return err
+			if recovery {
+				if err := guardRecoveryOutcome(ctx, tx, *input, now().UTC()); err != nil {
+					return err
+				}
+			} else {
+				current, err := lockCurrentClassificationClaim(ctx, tx, *input, now().UTC())
+				if err != nil || !current {
+					return err
+				}
 			}
 			observations := classifyFromMetadata(*input)
 			written, err := writeMetadataClassification(ctx, tx, *input, observations, now().UTC())
@@ -234,7 +278,7 @@ func Classify(ctx context.Context, paths Paths, opts ClassifyOptions) (ClassifyR
 			result.Processed++
 			result.MetadataClassified++
 			result.VisualObservationsWritten += written
-			contentUnavailable := classifier != nil && contentErr == nil && !hasImage && input.hasUnavailableLocalModelContent(hasImage)
+			contentUnavailable := classifier != nil && contentErr == nil && !hasImage && (recovery || input.hasUnavailableLocalModelContent(hasImage))
 			if !input.hasLocalContent() && !contentUnavailable {
 				result.WaitingForLocalContent++
 			}
@@ -247,11 +291,17 @@ func Classify(ctx context.Context, paths Paths, opts ClassifyOptions) (ClassifyR
 					return contentErr
 				}
 				result.ContentClassificationFailures++
-				return updateClassificationQueue(ctx, tx, input.QueueID, "content_failed", truncateReason(contentErr.Error()), now().UTC())
+				if err := updateClassificationQueue(ctx, tx, input.QueueID, "content_failed", truncateReason(contentErr.Error()), now().UTC()); err != nil {
+					return err
+				}
+				return writeRecoveryModelRun(ctx, tx, recovery, result, *classifier, responseEndpoints, claimedInputs, now().UTC())
 			}
 			if classifier == nil || !hasImage {
 				if contentUnavailable {
-					return updateClassificationQueue(ctx, tx, input.QueueID, "content_unavailable", "local_model_no_image_content", now().UTC())
+					if err := updateClassificationQueue(ctx, tx, input.QueueID, "content_unavailable", "local_model_no_image_content", now().UTC()); err != nil {
+						return err
+					}
+					return writeRecoveryModelRun(ctx, tx, recovery, result, *classifier, responseEndpoints, claimedInputs, now().UTC())
 				}
 				return nil
 			}
@@ -261,7 +311,7 @@ func Classify(ctx context.Context, paths Paths, opts ClassifyOptions) (ClassifyR
 			}
 			result.ContentClassified++
 			result.ContentObservationsWritten += contentWritten
-			return nil
+			return writeRecoveryModelRun(ctx, tx, recovery, result, *classifier, responseEndpoints, claimedInputs, now().UTC())
 		})
 		if temporaryPreview != "" {
 			// The invocation owns the whole directory it created.
@@ -271,11 +321,14 @@ func Classify(ctx context.Context, paths Paths, opts ClassifyOptions) (ClassifyR
 			}
 		}
 		if err != nil {
+			if recovery {
+				return ClassifyResult{}, fmt.Errorf("recovery incomplete: %w", err)
+			}
 			return ClassifyResult{}, err
 		}
 	}
-	if classifier != nil {
-		result.LocalModelResponseEndpoints = sortedEndpointSet(responseEndpoints)
+	result.LocalModelResponseEndpoints = sortedEndpointSet(responseEndpoints)
+	if classifier != nil && !recovery {
 		err := db.WithTx(ctx, func(tx *sql.Tx) error {
 			return writeModelRun(ctx, tx, result.ModelRunID, *classifier, responseEndpoints, claimedInputs, result.LocalModelHTTPRequestAttempts, result.LocalModelHTTPResponses, result.ContentClassified, result.ContentClassificationFailures, result.LocalModelDiagnostics, now().UTC())
 		})

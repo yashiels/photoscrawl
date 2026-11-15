@@ -34,7 +34,7 @@ photoscrawl --version
 ## Development
 
 Building from source requires Go 1.27.0 or later and the macOS SDK. The preferred
-build toolchain is Go 1.27.2, selected by the `toolchain` directive in `go.mod`.
+build toolchain is Go 1.27.3, selected by the `toolchain` directive in `go.mod`.
 Use the preferred toolchain for builds to include the latest standard-library
 security fixes; Go 1.27.0 remains the source compatibility minimum.
 
@@ -67,11 +67,18 @@ cancellation, late callbacks, and filesystem failures without accessing Photos.
 
 Official releases run only through the manual **Release (unified)** GitHub
 Actions workflow, which signs and notarizes the Darwin artifacts before
-publishing them:
+publishing them. First run the workflow on the release-preparation merge commit
+with `-f dry_run=true` and require it to pass. Create an annotated `vX.Y.Z` tag
+on that same commit using the fleet release signing key, verify it with
+`git -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag vX.Y.Z`,
+and push the verified tag. Then dispatch the publishing run from `main`:
 
 ```sh
 gh workflow run release-unified.yml --repo openclaw/photoscrawl -f version=X.Y.Z
 ```
+
+To validate the release pipeline without creating a tag or publishing artifacts,
+pass the current version and `-f dry_run=true` to the same workflow command.
 
 `make release` refuses local publishing and prints that exact command.
 
@@ -249,6 +256,7 @@ derivatives and thumbnails. A later explicit live record restores the asset and
 the resources present in that record without discarding other archive history.
 
 `classify` drains that queue into evidence-backed local metadata observations.
+For a controller-reserved retry cohort, see the [bounded recovery contract](docs/recovery-admission.md), including fixed leases, durable attempt markers, and explicit disposition of incomplete attempts.
 With `--local-model <model>`, it also sends image bytes to a local Ollama or
 OpenAI-compatible vision server and stores typed candidate
 observations:

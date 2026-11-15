@@ -135,3 +135,6 @@ records the actual safe outcome, including cancellation or storage failure.
 Failed finalization returns `remote-audit-failed` and leaves the durable pending
 record acknowledging a possible upload; it does not claim exact response
 metadata was saved. Audit-start failure prevents HTTP.
+
+Remote model and recovery modes are mutually exclusive. Do not combine remote
+classification flags with `--recovery-reservation-owner` or `--recovery-claim-owner`.
